@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Controle de Servos via Serial</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            margin: 20px;
+            background-color: #f4f4f4;
+        }
+        input, button, select {
+            margin: 10px;
+            padding: 10px;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            margin-bottom: 20px;
+        }
+        .slider-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .slider {
+            width: 60%;
+        }
+        .loop-controls {
+            margin-top: 20px;
+        }
+        .positions-container {
+            max-height: 200px;
+            overflow-y: auto;
+            background: #fff;
+            padding: 10px;
+            border-radius: 5px;
+            border: 1px solid #ddd;
+        }
+        .position-item {
+            padding: 5px;
+            background: #eee;
+            margin: 5px 0;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h2>Controle de 4 Servos via Serial</h2>
+
+    <div class="container">
+        <button id="connectButton">Conectar ao ESP32</button>
+        <div id="config"></div>
+        <button id="startControl" disabled>Iniciar Controle</button>
+    </div>
+
+    <div class="container" id="servos"></div>
+
+    <div class="container loop-controls">
+        <h3>Gerenciador de Posições</h3>
+        <div>
+            <label>Tempo entre posições (ms):</label>
+            <input type="number" id="tempoLoop" value="1000">
+        </div>
+        <button id="addPosition">Adicionar Posição</button>
+        <button id="startLoop">Iniciar Loop</button>
+        <button id="stopLoop">Parar Loop</button>
+        <div class="positions-container" id="positionsList"></div>
+    </div>
+
+    <script>
+        let port, writer, servoPinos = [], positions = [], loopActive = false;
+
+        document.getElementById("connectButton").addEventListener("click", async () => {
+            try {
+                port = await navigator.serial.requestPort();
+                await port.open({ baudRate: 115200 });
+                writer = port.writable.getWriter();
+                alert("Conectado ao ESP32!");
+                criarConfiguracao();
+            } catch (err) {
+                alert("Erro ao conectar: " + err.message);
+            }
+        });
+
+        function criarConfiguracao() {
+            const configContainer = document.getElementById("config");
+            configContainer.innerHTML = `<h3>Configurar pinos dos servos</h3>`;
+            for (let i = 0; i < 4; i++) {
+                let div = document.createElement("div");
+                div.innerHTML = `
+                    <label>Servo ${i + 1} - Escolha o pino:</label>
+                    <input type="number" min="0" max="39" id="servoPino${i}" placeholder="Ex: 13">
+                `;
+                configContainer.appendChild(div);
+            }
+            document.getElementById("startControl").disabled = false;
+        }
+
+        document.getElementById("startControl").addEventListener("click", () => {
+            servoPinos = [];
+            for (let i = 0; i < 4; i++) {
+                let pino = document.getElementById(`servoPino${i}`).value;
+                if (pino === "" || isNaN(pino) || pino < 0 || pino > 39) {
+                    alert(`Pino inválido para Servo ${i + 1}. Escolha um entre 0 e 39.`);
+                    return;
+                }
+                servoPinos.push(parseInt(pino));
+            }
+            criarSliders();
+        });
+
+        function criarSliders() {
+            const servosContainer = document.getElementById("servos");
+            servosContainer.innerHTML = `<h3>Controle de Servos</h3>`;
+            for (let i = 0; i < 4; i++) {
+                let pino = servoPinos[i];
+                let container = document.createElement("div");
+                container.classList.add("slider-container");
+                let label = document.createElement("label");
+                label.innerText = `Servo ${i + 1} (Pino ${pino}): `;
+                let slider = document.createElement("input");
+                slider.type = "range";
+                slider.min = "0";
+                slider.max = "180";
+                slider.value = "90";
+                slider.classList.add("slider");
+                slider.dataset.pino = pino;
+                let valor = document.createElement("span");
+                valor.innerText = "90°";
+
+                slider.addEventListener("input", function () {
+                    valor.innerText = this.value + "°";
+                });
+
+                slider.addEventListener("change", async function () {
+                    let comando = `${this.dataset.pino} ${this.value} 10\n`;
+                    console.log("Enviando:", comando);
+                    await writer.write(new TextEncoder().encode(comando));
+                });
+
+                container.appendChild(label);
+                container.appendChild(slider);
+                container.appendChild(valor);
+                servosContainer.appendChild(container);
+            }
+        }
+
+        document.getElementById("addPosition").addEventListener("click", () => {
+            let currentPositions = [];
+            document.querySelectorAll(".slider").forEach(slider => {
+                currentPositions.push({ pino: slider.dataset.pino, angulo: slider.value });
+            });
+
+            positions.push(currentPositions);
+            atualizarListaPosicoes();
+        });
+
+        function atualizarListaPosicoes() {
+            let listContainer = document.getElementById("positionsList");
+            listContainer.innerHTML = "";
+            positions.forEach((pos, index) => {
+                let div = document.createElement("div");
+                div.classList.add("position-item");
+                div.innerText = `Posição ${index + 1}: ${pos.map(p => `P${p.pino} → ${p.angulo}°`).join(", ")}`;
+                listContainer.appendChild(div);
+            });
+        }
+
+        document.getElementById("startLoop").addEventListener("click", async () => {
+            if (positions.length === 0) {
+                alert("Adicione pelo menos uma posição antes de iniciar o loop.");
+                return;
+            }
+            loopActive = true;
+            while (loopActive) {
+                for (let pos of positions) {
+                    if (!loopActive) break;
+                    for (let p of pos) {
+                        let comando = `${p.pino} ${p.angulo} 10\n`;
+                        console.log("Enviando Loop:", comando);
+                        await writer.write(new TextEncoder().encode(comando));
+                    }
+                    await new Promise(r => setTimeout(r, document.getElementById("tempoLoop").value));
+                }
+            }
+        });
+
+        document.getElementById("stopLoop").addEventListener("click", () => {
+            loopActive = false;
+        });
+    </script>
+</body>
+</html>
